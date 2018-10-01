@@ -17,7 +17,8 @@ from concurrent.futures import ThreadPoolExecutor, wait
 
 from .exceptions import StackDoesNotExistError
 
-from .helpers import recurse_into_sub_stack_groups, _detect_cycles
+from .helpers import (recurse_into_sub_stack_groups,
+                      recurse_sub_stack_groups_with_graph)
 from .stack_status import StackStatus
 from .config.graph import StackDependencyGraph
 
@@ -42,6 +43,7 @@ class StackGroup(object):
     :param options: A dict of key-value pairs to update self.config with.
     :type debug: dict
     """
+
     def __init__(self, path, options=None):
         self.logger = logging.getLogger(__name__)
         self.path = path
@@ -65,10 +67,9 @@ class StackGroup(object):
         :returns: dict
         """
         self.logger.debug("Launching stack_group '%s'", self.path)
+        launch_dependencies = self._get_launch_dependencies()
         threading_events = self._get_threading_events()
         stack_statuses = self._get_initial_statuses()
-        launch_dependencies = self._get_launch_dependencies()
-
         self._build(
             "launch", threading_events, stack_statuses, launch_dependencies
         )
@@ -129,7 +130,7 @@ class StackGroup(object):
                     raise
         return response
 
-    @recurse_into_sub_stack_groups
+    @recurse_sub_stack_groups_with_graph
     def _build(self, command, threading_events, stack_statuses, dependencies):
         """
         Launches or deletes all stacks in the stack_group.
@@ -147,11 +148,12 @@ class StackGroup(object):
         """
         if self.stacks:
             with ThreadPoolExecutor(max_workers=len(self.stacks))\
-              as stack_group:
+                    as stack_group:
                 futures = [
                     stack_group.submit(
                         self._manage_stack_build, stack,
-                        command, threading_events, stack_statuses, dependencies
+                        command, threading_events, stack_statuses,
+                        dependencies
                     )
                     for stack in self.stacks
                 ]
@@ -182,16 +184,15 @@ class StackGroup(object):
         "delete".
         :type command: str
         """
-        import ipdb
-        ipdb.set_trace()
         for dependency in dependencies[stack.name]:
-            threading_events[dependency].wait()
-            if stack_statuses[dependency] != StackStatus.COMPLETE:
-                self.logger.debug(
-                    "%s, which %s depends is not complete. Marking "
-                    "%s as failed.", dependency, stack.name, dependency
-                )
-                stack_statuses[stack.name] = StackStatus.FAILED
+            if dependency in threading_events:
+                threading_events[dependency].wait()
+                if stack_statuses[dependency] != StackStatus.COMPLETE:
+                    self.logger.debug(
+                        "%s, which %s depends is not complete. Marking "
+                        "%s as failed.", dependency, stack.name, dependency
+                    )
+                    stack_statuses[stack.name] = StackStatus.FAILED
 
         if stack_statuses[stack.name] != StackStatus.FAILED:
             try:
@@ -214,10 +215,12 @@ class StackGroup(object):
             stack's name.
         :rtype: dict
         """
-        return {
+        events = {
             stack.name: threading.Event()
             for stack in self.stacks
         }
+        self.logger.debug(events)
+        return events
 
     @recurse_into_sub_stack_groups
     def _get_initial_statuses(self):
@@ -234,20 +237,19 @@ class StackGroup(object):
             for stack in self.stacks
         }
 
-    @recurse_into_sub_stack_groups
+    @recurse_sub_stack_groups_with_graph
     def _get_launch_dependencies(self):
         """
-        Returns a dict of each stack's launch dependencies.
+        Returns a StackDependencyGraph of each stack's launch dependencies.
 
         :returns: A list of the stacks that a particular stack depends on
             while launching, keyed by that stack's name.
-        :rtype: dict
+        :rtype: StackDependencyGraph
         """
         all_dependencies = {
             stack.name: stack.dependencies
             for stack in self.stacks
         }
-
         return StackDependencyGraph(all_dependencies)
 
     def _get_delete_dependencies(self):

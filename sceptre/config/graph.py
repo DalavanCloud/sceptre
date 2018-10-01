@@ -8,6 +8,7 @@ of a stack's dependencies.
 
 import logging
 import networkx as nx
+from sceptre.exceptions import CircularDependenciesError
 
 
 class StackDependencyGraph(object):
@@ -21,12 +22,16 @@ class StackDependencyGraph(object):
     :type inital_config_path: str
     """
 
-    def __init__(self, dependency_map):
+    def __init__(self, dependency_map=None):
         self.logger = logging.getLogger(__name__)
         self.graph = nx.DiGraph()
+        if dependency_map is None:
+            dependency_map = {}
         self.dependency_map = dependency_map
         self._generate_graph()
-        nx.drawing.nx_pydot.write_dot(self.graph, "out.dot")
+
+    def __repr__(self):
+        return str(nx.convert.to_dict_of_lists(self.graph))
 
     def _generate_graph(self):
         """
@@ -34,6 +39,9 @@ class StackDependencyGraph(object):
         """
         for stack, dependencies in self.dependency_map.items():
             self._generate_edges(stack, dependencies)
+
+    def _is_acyclic(self):
+        return nx.is_directed_acyclic_graph(self.graph)
 
     def _generate_edges(self, stack_path, dependency_paths):
         """
@@ -46,23 +54,32 @@ class StackDependencyGraph(object):
         :type inital_dependency_paths: string
         """
         self.logger.debug(
-            "Generate edges for graph {0}".format(
-                self.graph
-            )
+            "Generate edges for graph {0}".format(self.graph)
         )
         for dependency_path in dependency_paths:
             edge = self.graph.add_edge(stack_path, dependency_path)
-            if not nx.is_directed_acyclic_graph(self.graph):
-                raise Exception("Dependency cycle detected: {} {}".format(stack_path, dependency_path))
+            if not self._is_acyclic():
+                raise CircularDependenciesError(
+                    "Dependency cycle detected: {} {}".format(stack_path,
+                                                              dependency_path))
             self.logger.debug("Added edge: {}".format(edge))
+
+        if not dependency_paths:
+            self.graph.add_node(stack_path)
+
+        self.graph.remove_edges_from(nx.selfloop_edges(self.graph))
 
     def reverse_graph(self):
         rev = StackDependencyGraph({})
         rev.graph = nx.reverse(self.graph)
         return rev
 
-    def __getitem__(self, param, default=None):
-        """
-        Enables retrival of dependencies using dependencies[stack.name]
-        """
-        return self.graph[param].keys()
+    def update(self, other):
+        self.graph = nx.compose(self.graph, other.graph)
+
+    def as_dict(self):
+        d = nx.convert.to_dict_of_lists(self.graph)
+        for key in d.copy():
+            if ".yaml" in key:
+                d.pop(key)
+        return d
