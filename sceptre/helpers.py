@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 
 from functools import wraps
-import glob
-import imp
-import inspect
-import os
-import sys
 import re
 
 from concurrent.futures import ThreadPoolExecutor
@@ -47,7 +42,6 @@ def recurse_into_sub_stack_groups(func, factory=dict):
         function_name = func.__name__
         responses = factory()
         num_stack_groups = len(self.sub_stack_groups)
-        print("sub stack groups: " + str(num_stack_groups))
         # As commands carried out by sub-stack_groups may be blocking,
         # execute them on separate threads.
         if num_stack_groups:
@@ -145,49 +139,6 @@ def mask_key(key):
         "*" if i < num_mask_chars else c
         for i, c in enumerate(key)
     ])
-
-
-def get_subclasses(class_type, directory=None):
-    """
-    Creates a dictionary of classes which inherit from ``class_type`` found in
-    all python files within a given directory, keyed by the class name in snake
-    case as a string.
-
-    :param class_type: The base class that all returned classes should inherit
-        from.
-    :type class_type: cls
-    :param directory: The directory to look for classes in.
-    :type directory: str
-    :returns: A dict of classes found.
-    :rtype: dict
-    """
-    try:
-        glob_expression = os.path.join(directory, "*.py")
-    except (AttributeError, TypeError):
-        raise TypeError("'directory' object should be a string")
-
-    module_paths = glob.glob(glob_expression)
-
-    sys.path.append(directory)
-
-    modules = [
-        imp.load_source(
-            os.path.basename(module_path).split(".")[0], module_path
-        )
-        for module_path in module_paths
-        if "__init__" not in module_path
-    ]
-
-    classes = {}
-
-    for module in modules:
-        for attr in module.__dict__.values():
-            if inspect.isclass(attr) \
-                and issubclass(attr, class_type) \
-                    and not inspect.isabstract(attr):
-                classes[camel_to_snake_case(attr.__name__)] = attr
-
-    return classes
 
 
 def _call_func_on_values(func, attr, cls):
